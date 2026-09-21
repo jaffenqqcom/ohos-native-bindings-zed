@@ -5,11 +5,17 @@ use std::mem::MaybeUninit;
 use ohos_arkui_input_binding::ArkUIInputEvent;
 use ohos_xcomponent_sys::{
     OH_NativeXComponent, OH_NativeXComponent_GetKeyEvent, OH_NativeXComponent_GetKeyEventAction,
-    OH_NativeXComponent_GetKeyEventCode, OH_NativeXComponent_GetKeyEventDeviceId,
-    OH_NativeXComponent_GetKeyEventSourceType, OH_NativeXComponent_GetKeyEventTimestamp,
-    OH_NativeXComponent_GetMouseEvent, OH_NativeXComponent_GetTouchEvent,
-    OH_NativeXComponent_GetTouchPointToolType, OH_NativeXComponent_MouseEvent,
-    OH_NativeXComponent_TouchEvent,
+    OH_NativeXComponent_GetKeyEventCapsLockState, OH_NativeXComponent_GetKeyEventCode,
+    OH_NativeXComponent_GetKeyEventDeviceId,
+    OH_NativeXComponent_GetKeyEventModifierKeyStates, OH_NativeXComponent_GetKeyEventSourceType,
+    OH_NativeXComponent_GetKeyEventTimestamp, OH_NativeXComponent_GetMouseEvent,
+    OH_NativeXComponent_GetTouchEvent, OH_NativeXComponent_GetTouchPointToolType,
+    OH_NativeXComponent_MouseEvent, OH_NativeXComponent_TouchEvent,
+};
+#[cfg(feature = "api-20")]
+use ohos_xcomponent_sys::{
+    OH_NativeXComponent_ExtraMouseEventInfo, OH_NativeXComponent_GetExtraMouseEventInfo,
+    OH_NativeXComponent_GetMouseEventModifierKeyStates,
 };
 
 use crate::{Action, EventSource, KeyCode, KeyEventData, MouseEventData, WindowRaw, XComponentRaw};
@@ -222,6 +228,16 @@ pub unsafe extern "C" fn key_event(
     let ret = OH_NativeXComponent_GetKeyEventTimestamp(event, &mut timestamp);
     assert!(ret == 0, "Get key event timestamp failed");
 
+    // Modifier key state is carried with each key event; bit definitions see ArkUI_ModifierKeyName
+    let mut modifier_state = 0u64;
+    let ret = OH_NativeXComponent_GetKeyEventModifierKeyStates(event, &mut modifier_state);
+    assert!(ret == 0, "Get key event modifier key states failed");
+
+    // Caps Lock state is queried from the same key event and carried alongside it.
+    let mut capslock = false;
+    let ret = OH_NativeXComponent_GetKeyEventCapsLockState(event, &mut capslock);
+    assert!(ret == 0, "Get key event caps lock state failed");
+
     let window = WindowRaw(window);
     let xcomponent = XComponentRaw(xcomponent);
 
@@ -231,6 +247,8 @@ pub unsafe extern "C" fn key_event(
         device_id,
         source: EventSource::from(source),
         timestamp,
+        modifier_state,
+        capslock,
     };
 
     #[cfg(not(feature = "multi_mode"))]
@@ -263,7 +281,23 @@ pub unsafe extern "C" fn on_mouse_event(
     assert!(ret == 0, "Get mouse event failed");
 
     let mouse_event_data = mouse_event.assume_init();
-    let data = MouseEventData::from(mouse_event_data);
+    let mut data = MouseEventData::from(mouse_event_data);
+
+    // The NDK mouse event struct carries no modifier field, so the modifier-key
+    // state is queried live from the extra mouse event info (api-20+). This is
+    // a per-event query, never a cached state.
+    #[cfg(feature = "api-20")]
+    {
+        let mut extra: *mut OH_NativeXComponent_ExtraMouseEventInfo = std::ptr::null_mut();
+        if OH_NativeXComponent_GetExtraMouseEventInfo(xcomponent, &mut extra) == 0
+            && !extra.is_null()
+        {
+            let mut keys = 0u64;
+            if OH_NativeXComponent_GetMouseEventModifierKeyStates(extra, &mut keys) == 0 {
+                data.modifiers = keys;
+            }
+        }
+    }
 
     let window = WindowRaw(window);
     let xcomponent = XComponentRaw(xcomponent);

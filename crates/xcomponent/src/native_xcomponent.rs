@@ -3,13 +3,13 @@
 use std::rc::Rc;
 
 use napi_ohos::{Error, Result};
-use ohos_arkui_input_binding::ArkUIInputEvent;
+use ohos_arkui_input_binding::{ArkUIInputEvent, UIInputEvent};
 use ohos_xcomponent_sys::{
     OH_NativeXComponent, OH_NativeXComponent_Callback, OH_NativeXComponent_ExpectedRateRange,
     OH_NativeXComponent_MouseEvent_Callback, OH_NativeXComponent_RegisterCallback,
     OH_NativeXComponent_RegisterKeyEventCallback, OH_NativeXComponent_RegisterMouseEventCallback,
     OH_NativeXComponent_RegisterOnFrameCallback, OH_NativeXComponent_RegisterUIInputEventCallback,
-    OH_NativeXComponent_SetExpectedFrameRateRange,
+    OH_NativeXComponent_SetExpectedFrameRateRange, OH_NativeXComponent_UnregisterOnFrameCallback,
 };
 
 use crate::{
@@ -226,6 +226,19 @@ impl NativeXComponent {
         Ok(())
     }
 
+    /// Unregister frame callback. Stops the per-vsync frame callback entirely,
+    /// so an idle window no longer wakes the main thread every frame.
+    pub fn off_frame_callback(&self) -> Result<()> {
+        let ret: XComponentResultCode =
+            unsafe { OH_NativeXComponent_UnregisterOnFrameCallback(self.raw()).into() };
+        if ret != XComponentResultCode::Success {
+            return Err(Error::from_reason(
+                "XComponent unregister frame callback failed",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn on_key_event<T: Fn(XComponentRaw, WindowRaw, KeyEventData) -> Result<()> + 'static>(
         &self,
         cb: T,
@@ -314,8 +327,15 @@ impl NativeXComponent {
         Ok(())
     }
 
+    /// Register a UI input event callback for a specific event type.
+    ///
+    /// The `event_type` selects which `ArkUI_UIInputEvent_Type` this registration
+    /// listens for (e.g. `UIInputEvent::Axis` for wheel/trackpad scrolling and
+    /// `UIInputEvent::Mouse` for pointer input). Multiple registrations may be
+    /// issued with the same callback to listen for several event types at once.
     pub fn on_ui_input_event<T: Fn(XComponentRaw, ArkUIInputEvent) -> Result<()> + 'static>(
         &self,
+        event_type: UIInputEvent,
         cb: T,
     ) -> Result<()> {
         #[cfg(not(feature = "multi_mode"))]
@@ -334,7 +354,7 @@ impl NativeXComponent {
             OH_NativeXComponent_RegisterUIInputEventCallback(
                 self.raw(),
                 Some(on_ui_input_event),
-                ohos_arkui_input_binding::UIInputEvent::Axis.into(),
+                event_type.into(),
             )
             .into()
         };
